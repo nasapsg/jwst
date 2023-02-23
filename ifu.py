@@ -9,11 +9,10 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 import scipy.ndimage as scimg
 
-base = 'jw02416003001_03101'; px = 14; py = 31; ndither = 4;  # Comet
+base = 'jw02416003001_03101'; px = 14; py = 32; ndither = 4;  # Comet
 #base = 'jw01128002001_03102'; px = 24; py = 25; ndither = 20; # SNAP-2 (2MASS J16194609+5534178) v=16.23
-gamma = 0.013 # Flux scaling factor (derived from SNAP-2, Feb/19/2023)
-frames = []
 nirang = 138.0
+lmin = 20; lmax = 30
 drad = 2
 dbkg = 5
 
@@ -33,12 +32,25 @@ for i in range(ndither):
     jac = fr[1].header['PHOTUJA2']*1e-6*ac2
     fr.close()
     data = fits.getdata(file)#/(dtt*jac)
-    data *= 2.35040007004737E-13*1e6*0.013
+    data *= 2.35040007004737E-13*1e6
 
-    data = data[20:,:,:]; wv0 += dwv*20.0
-    if len(frames)==0: 
-        npts = data.shape[0]; xs = data.shape[2]; ys = data.shape[1]
+    data = data[lmin:-lmax,:,:]; wv0 += dwv*lmin
+    if i==0: 
+        # Create photometric masks
+        npts = data.shape[0]; xs = data.shape[2]; ys = data.shape[1]        
         frames = np.zeros([ndither, npts, ys, xs])
+        maskc = np.zeros([ys,xs]); npc=0.0
+        maskb = np.zeros([ys,xs]); npb=0.0
+        for k in range(xs):
+            for j in range(ys):
+                di = k-px
+                dj = j-py
+                dd = np.sqrt(di*di + dj*dj)
+                if dd<=drad: maskc[j,k]=1.0; npc+=1.0
+                elif dd>drad and dd<=dbkg+drad: maskb[j,k]=1.0; npb+=1.0
+            #Endfor
+        #Endfor
+        
         mask = np.zeros([npts, ys, xs])
         for k in range(xs):
             for j in range(ys):
@@ -49,13 +61,6 @@ for i in range(ndither):
             #Endfor
         #Endfor
     #Endif
-    data = data*mask
-    mm = np.sum(mask,axis=0)
-    ind = (mm!=0).nonzero()
-    mask = np.zeros([ys, xs])
-    mask[ind]=1.0
-    if i==0: tmask=mask
-    else: tmask = tmask*mask
 
     # Align frames
     dx = -round((ox/dpx)*np.cos(ang) - (oy/dpy)*np.sin(ang))
@@ -64,19 +69,11 @@ for i in range(ndither):
     elif dx>=0 and dy<0:  frames[i, 0:npts,0:ys+dy,dx:] = data[0:npts,-dy:,0:xs-dx]
     elif dx<0  and dy>=0: frames[i, 0:npts,dy:,0:xs+dx] = data[0:npts,0:ys-dy,-dx:]
     elif dx<0  and dy<0:  frames[i, 0:npts,0:ys+dy,0:xs+dx] = data[0:npts,-dy:,-dx:]
-#Endfor
-
-# Create photometric masks
-maskc = np.zeros([ys,xs]); npc=0.0
-maskb = np.zeros([ys,xs]); npb=0.0
-for i in range(xs):
-    for j in range(ys):
-        di = i-px
-        dj = j-py
-        dd = np.sqrt(di*di + dj*dj)
-        if dd<=drad: maskc[j,i]=1.0; npc+=1.0
-        elif dd>drad and dd<=dbkg+drad: maskb[j,i]=1.0; npb+=1.0
-    #Endfor
+    ind = (np.isfinite(frames[i,10,:,:]))
+    cmask = np.zeros([ys,xs]) + np.nan
+    cmask[ind] = 1.0
+    if i==0: tmask=cmask
+    else: tmask=tmask*cmask   
 #Endfor
 
 # Apply total mask
@@ -88,7 +85,7 @@ for i in range(ndither):
 
 # Clean frames and perform aperture integration
 wvls = np.arange(npts)*dwv + wv0
-cube = np.median(frames,0)
+cube = np.nanmedian(frames,0)
 spec = np.zeros(npts)
 noise = np.zeros(npts)
 inb = (maskb!=0).nonzero()
@@ -97,15 +94,15 @@ for i in range(npts):
 
     # Remove abnormally negative values
     dt = frames[0,i,:,:] - frames[1,i,:,:]
-    ind = (dt!=0).nonzero()
-    rms = np.sqrt(np.median(dt[ind]*dt[ind]))/2.0
+    ind = ((dt!=0)*(np.isfinite(dt))).nonzero()
+    rms = np.sqrt(np.nanmedian(dt[ind]*dt[ind]))/2.0
     ind = (img<-5.0*rms).nonzero()
     img[ind] = 0.0
     cube[i,:,:] = img
 
     # Perform aperture integration
-    bkg = np.sum(img*maskb)*(npc/npb)
-    flx = np.sum(img*maskc)
+    bkg = np.nansum(img*maskb)*(npc/npb)
+    flx = np.nansum(img*maskc)
     spec[i] = flx - bkg
     noise[i] = rms*np.sqrt(npc)
 
@@ -122,7 +119,7 @@ print('Aperture is %.2f arcsec in diameter' % (dpx*(drad*2+1)))
 fw = open('spec.txt','w')
 for i in range(npts): fw.write('%.6f %e %e\n' % (wvls[i],spec[i],noise[i]))
 fw.close()
-plt.plot(spec)
+plt.plot(wvls,spec)
 plt.show()
 exit()
 
